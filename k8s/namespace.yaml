@@ -1,0 +1,28 @@
+# Namespace-per-concern isolation (Ch. 14.2 of the design doc).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: orchestration
+  labels:
+    app.kubernetes.io/part-of: mira
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-servers
+  labels:
+    app.kubernetes.io/part-of: mira
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: guardrails
+  labels:
+    app.kubernetes.io/part-of: mira
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: voice-gateway
+  labels:
+    app.kubernetes.io/part-of: mira

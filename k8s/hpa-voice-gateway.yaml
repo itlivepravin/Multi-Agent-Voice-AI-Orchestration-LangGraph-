@@ -1,0 +1,55 @@
+# Voice-gateway pods (Ch. 15.2's Q2: stateful media-server scaling pattern).
+# New sessions load-balance to pods with capacity headroom; pods drain
+# (stop accepting new sessions) rather than hard-terminate on scale-down.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mira-voice-gateway
+  namespace: voice-gateway
+spec:
+  replicas: 10
+  selector:
+    matchLabels: { app: mira-voice-gateway }
+  template:
+    metadata:
+      labels: { app: mira-voice-gateway }
+    spec:
+      # Dedicated node pool, guaranteed CPU, no noisy-neighbor risk (Ch. 14.2/15.2).
+      nodeSelector:
+        workload-tier: latency-sensitive
+      terminationGracePeriodSeconds: 120  # allow in-flight calls to drain
+      containers:
+        - name: media-server
+          image: <ECR_REGISTRY>/mira-voice-gateway:<TAG>
+          resources:
+            requests: { cpu: "1", memory: "1Gi" }
+            limits: { cpu: "2", memory: "2Gi" }
+          ports:
+            - containerPort: 5060   # SIP
+            - containerPort: 10000  # RTP range start
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "curl -X POST localhost:8081/drain && sleep 90"]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mira-voice-gateway-hpa
+  namespace: voice-gateway
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mira-voice-gateway
+  minReplicas: 10
+  maxReplicas: 500
+  metrics:
+    - type: Pods
+      pods:
+        metric: { name: mira_active_calls_per_pod }
+        target: { type: AverageValue, averageValue: "50" }
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 10
+      policies: [{ type: Percent, value: 150, periodSeconds: 30 }]

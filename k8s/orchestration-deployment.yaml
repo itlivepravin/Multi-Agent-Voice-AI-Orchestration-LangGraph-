@@ -1,0 +1,90 @@
+# LangGraph orchestration service (Ch. 14.2/14.3 of the design doc).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mira-orchestration
+  namespace: orchestration
+  labels:
+    app: mira-orchestration
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: mira-orchestration
+  template:
+    metadata:
+      labels:
+        app: mira-orchestration
+      annotations:
+        # OTel sidecar auto-injection (Ch. 16.3 cross-cutting correlation)
+        sidecar.opentelemetry.io/inject: "true"
+    spec:
+      containers:
+        - name: mira-orchestration
+          image: <ECR_REGISTRY>/mira-orchestration:<TAG>
+          ports:
+            - containerPort: 8080
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "2", memory: "1Gi" }
+          envFrom:
+            - secretRef:
+                name: mira-secrets   # synced from AWS Secrets Manager via External Secrets Operator (Ch. 14.3)
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mira-orchestration
+  namespace: orchestration
+spec:
+  selector:
+    app: mira-orchestration
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+# Custom-metric HPA (Ch. 15.2): scale on active session count / p99 latency,
+# not CPU alone, since this is an I/O-bound streaming workload.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mira-orchestration-hpa
+  namespace: orchestration
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mira-orchestration
+  minReplicas: 6
+  maxReplicas: 200
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: mira_active_sessions_per_pod
+        target:
+          type: AverageValue
+          averageValue: "40"
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60   # conservative threshold (Ch. 15.2) — protects latency during scale-up
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 15
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300   # slow scale-down avoids thrashing
